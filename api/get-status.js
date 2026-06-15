@@ -86,7 +86,11 @@ module.exports = async (req, res) => {
 
   try {
     if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-      return res.status(500).json({ success: false, error: "Hệ thống thiếu cấu hình FIREBASE_SERVICE_ACCOUNT trên Vercel!" });
+      return res.status(500).json({ 
+        success: false, 
+        error: "Hệ thống không tìm thấy FIREBASE_SERVICE_ACCOUNT!", 
+        danhSachBienNhanDuoc: Object.keys(process.env) // <--- Thêm dòng này để dò tìm tên biến
+      });
     }
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
     if (!getApps().length) {
