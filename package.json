@@ -1,0 +1,19 @@
+{
+  "name": "apple-api-vercel",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.18.0",
+    "firebase-admin": "^14.0.0",
+    "googleapis": "^173.0.0",
+    "jsonwebtoken": "^9.0.3"
+  }
+}
