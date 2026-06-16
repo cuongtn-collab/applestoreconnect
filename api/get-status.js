@@ -43,25 +43,24 @@ function createColorRuleRequest(sheetId, ranges, textToFind, rgbBg, rgbText, isB
   };
 }
 
-// HÀM TẠO POPUP CARD (EMBED) ĐA SẮC CHO DISCORD
+// HÀM GỬI DISCORD 1 DÒNG SIÊU NGẮN
 async function sendDiscordAlert(webhookUrl, accountName, appName, version, newStatus) {
   if (!webhookUrl || webhookUrl.includes("ĐIỀN_LINK_DISCORD")) return;
 
-  let colorCode = "\u001b[1;30m"; // Màu xám mặc định
+  let colorCode = "\u001b[1;30m"; 
   let icon = "⚪";
 
   if (newStatus.includes("READY") || newStatus.includes("APPROVED")) {
-    colorCode = "\u001b[1;32m"; // Màu xanh lá
+    colorCode = "\u001b[1;32m"; 
     icon = "🟢";
   } else if (newStatus.includes("REVIEW") || newStatus.includes("WAITING") || newStatus.includes("PROCESSING")) {
-    colorCode = "\u001b[1;33m"; // Màu vàng
+    colorCode = "\u001b[1;33m"; 
     icon = "🟡";
   } else if (newStatus.includes("REJECTED")) {
-    colorCode = "\u001b[1;31m"; // Màu đỏ rực
+    colorCode = "\u001b[1;31m"; 
     icon = "🔴";
   }
 
-  // Khối mã ansi ép Discord đổi màu chữ chính xác của trạng thái
   const ansiMessage = "```ansi\n" + `${icon} [${accountName}] ${appName} (v${version}) -> ${colorCode}${newStatus}\u001b[0m` + "\n```";
 
   try {
@@ -80,17 +79,12 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // ⚠️ ĐIỀN CÁC THÔNG SỐ CẤU HÌNH CỦA BẠN VÀO ĐÂY
   const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
   const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 
   try {
     if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-      return res.status(500).json({ 
-        success: false, 
-        error: "Hệ thống không tìm thấy FIREBASE_SERVICE_ACCOUNT!", 
-        danhSachBienNhanDuoc: Object.keys(process.env) // <--- Thêm dòng này để dò tìm tên biến
-      });
+      return res.status(500).json({ success: false, error: "Hệ thống thiếu cấu hình FIREBASE_SERVICE_ACCOUNT trên Vercel!" });
     }
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
     if (!getApps().length) {
@@ -114,7 +108,6 @@ module.exports = async (req, res) => {
     const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
     let existingTabs = sheetMeta.data.sheets.map(s => ({ title: s.properties.title, id: s.properties.sheetId }));
 
-    // HÀM QUÉT SONG SONG CỦA TỪNG ACCOUNT
     const fetchSingleAccountData = async (account) => {
       if (!account.privateKey) {
         return { accountName: account.accountName, status: "Trống", t1: [], t2: [], m1: [], m2: [] };
@@ -135,7 +128,7 @@ module.exports = async (req, res) => {
         const included = response.data.included || [];
         
         let table1Rows = [["Tên Game", "Phiên Bản", "Trạng Thái App", "Chiến Dịch PPO (A/B Test)", "Trạng Thái PPO", "Tỷ Lệ Traffic"]];
-        let table2Rows = [["Tên Game", "Thời Gian Gửi Duyệt (Múi giờ VN)", "Trạng Thái Đợt Duyệt Đơn"]];
+        let table2Rows = [["Tên Game", "Thời Gian Ghi Nhận (Mốc sự kiện)", "Trạng Thái Của Đợt Duyệt"]];
         
         let m1Config = [];
         let m2Config = [];
@@ -144,7 +137,7 @@ module.exports = async (req, res) => {
           const appName = app.attributes.name;
           const cleanAppId = app.id;
 
-          // Bảng 1: Versions & PPO
+          // --- XỬ LÝ BẢNG 1: QUÉT TRẠNG THÁI VÀ VIẾT NHẬT KÝ VÀO FIREBASE ---
           let t1Start = table1Rows.length;
           let appHasVersions = false;
           const versionLinks = app.relationships.appStoreVersions.data || [];
@@ -156,18 +149,39 @@ module.exports = async (req, res) => {
               const currentVersion = vInfo.attributes.versionString;
               const currentStatus = vInfo.attributes.appStoreState;
 
-              // Kiểm tra thay đổi trạng thái và bắn Discord Popup
               const appFirebaseRef = db.collection('app_status_cache').doc(`${account.id}_${cleanAppId}_${currentVersion}`);
               const cacheDoc = await appFirebaseRef.get();
               
+              let statusHistory = [];
+
               if (cacheDoc.exists) {
-                const oldStatus = cacheDoc.data().lastKnownStatus;
+                const data = cacheDoc.data();
+                const oldStatus = data.lastKnownStatus;
+                // Bốc lại toàn bộ mảng lịch sử cũ (nếu có)
+                statusHistory = data.history || [];
+
                 if (oldStatus !== currentStatus) {
                   await sendDiscordAlert(DISCORD_WEBHOOK_URL, account.accountName, appName, currentVersion, currentStatus);
-                  await appFirebaseRef.update({ lastKnownStatus: currentStatus, updatedAt: new Date() });
+                  
+                  // Khắc thêm 1 dòng vào mảng lịch sử
+                  statusHistory.push({ status: currentStatus, time: new Date().toISOString() });
+                  await appFirebaseRef.update({ 
+                    lastKnownStatus: currentStatus, 
+                    history: statusHistory,
+                    updatedAt: new Date() 
+                  });
                 }
               } else {
-                await appFirebaseRef.set({ accountId: account.id, appName, version: currentVersion, lastKnownStatus: currentStatus, updatedAt: new Date() });
+                // Lần đầu thấy App, khởi tạo sổ nhật ký
+                statusHistory = [{ status: currentStatus, time: new Date().toISOString() }];
+                await appFirebaseRef.set({ 
+                  accountId: account.id, 
+                  appName: appName, 
+                  version: currentVersion, 
+                  lastKnownStatus: currentStatus, 
+                  history: statusHistory,
+                  updatedAt: new Date() 
+                });
               }
 
               let ppoCampaigns = [];
@@ -191,27 +205,55 @@ module.exports = async (req, res) => {
           let t1End = table1Rows.length;
           if (t1End > t1Start + 1) m1Config.push({ startRow: t1Start, endRow: t1End });
 
-          // Bảng 2: Timeline Lịch sử duyệt đơn
+          // --- XỬ LÝ BẢNG 2: ĐỌC LỊCH SỬ TỪ FIREBASE ĐỔ RA GOOGLE SHEETS ---
           let t2Start = table2Rows.length;
-          let historyLogs = [];
           try {
-            const subRes = await axios.get(`https://api.appstoreconnect.apple.com/v1/apps/${cleanAppId}/reviewSubmissions`, { 
-              headers: { 'Authorization': `Bearer ${token}` } 
-            });
-            if (subRes.data.data && subRes.data.data.length > 0) {
-              historyLogs = subRes.data.data.sort((a, b) => new Date(a.attributes.submittedDate) - new Date(b.attributes.submittedDate));
-            }
-          } catch (e) {}
+            // Gom tất cả các phiên bản của game này trong Firebase
+            const historyQuery = await db.collection('app_status_cache').where('accountId', '==', account.id).get();
 
-          if (historyLogs.length > 0) {
-            for (const sub of historyLogs) {
-              const d = new Date(sub.attributes.submittedDate);
-              const formattedDate = d.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
-              table2Rows.push([appName, formattedDate, sub.attributes.state]);
+            let allHistory = [];
+            historyQuery.forEach(doc => {
+              // Lọc chuẩn xác Game ID
+              if (doc.id.includes(`_${cleanAppId}_`)) {
+                const data = doc.data();
+                let hist = data.history;
+                
+                // Mẹo nhỏ: Hỗ trợ data cũ chưa có mảng history của ngày hôm qua
+                if (!hist && data.lastKnownStatus) {
+                  let timeVal = new Date().toISOString();
+                  if (data.updatedAt && typeof data.updatedAt.toDate === 'function') {
+                    timeVal = data.updatedAt.toDate().toISOString();
+                  }
+                  hist = [{ status: data.lastKnownStatus, time: timeVal }];
+                }
+
+                if (hist) {
+                  hist.forEach(item => {
+                    allHistory.push({
+                      version: data.version,
+                      status: item.status,
+                      time: new Date(item.time)
+                    });
+                  });
+                }
+              }
+            });
+
+            // Sắp xếp các sự kiện trên Firebase theo thời gian tăng dần
+            allHistory.sort((a, b) => a.time - b.time);
+
+            if (allHistory.length > 0) {
+              allHistory.forEach(item => {
+                const formattedDate = item.time.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
+                table2Rows.push([appName, formattedDate, `[v${item.version}] ${item.status}`]);
+              });
+            } else {
+              table2Rows.push([appName, "Bot đang bắt đầu ghi chép từ hôm nay...", "-"]);
             }
-          } else {
-            table2Rows.push([appName, "Chưa ghi nhận lịch sử gửi đơn", "-"]);
+          } catch (e) {
+            table2Rows.push([appName, "Đang khởi tạo bộ nhớ lịch sử...", "-"]);
           }
+          
           let t2End = table2Rows.length;
           if (t2End > t2Start + 1) m2Config.push({ startRow: t2Start, endRow: t2End });
         }
@@ -296,7 +338,6 @@ module.exports = async (req, res) => {
         ...mergeRequests2,
         { mergeCells: { range: { sheetId: currentSheetId, startRowIndex: bannerIndex, endRowIndex: bannerIndex + 1, startColumnIndex: 0, endColumnIndex: 6 }, mergeType: "MERGE_ALL" } },
         
-        // Sửa lỗi gõ phím, nạp hàm nhà máy siêu sạch
         createHeaderStyleRequest(currentSheetId, 0, 1, { red: 0.12, green: 0.3, blue: 0.47 }), 
         createHeaderStyleRequest(currentSheetId, bannerIndex, bannerIndex + 1, { red: 0.22, green: 0.29, blue: 0.36 }), 
         createHeaderStyleRequest(currentSheetId, header2Index, header2Index + 1, { red: 0.27, green: 0.44, blue: 0.53 }), 
@@ -323,7 +364,7 @@ module.exports = async (req, res) => {
       sheetActionLogs.push({ account: tabName, status: "Thành công" });
     }
 
-    return res.status(200).json({ success: true, message: "Hệ thống đã sửa đổi dữ liệu và đồng bộ mỹ thuật lên Google Sheets thành công!", report: sheetActionLogs });
+    return res.status(200).json({ success: true, message: "Hệ thống đã nâng cấp sổ nhật ký độc lập và đổ màu lên Google Sheets thành công!", report: sheetActionLogs });
   } catch (error) { 
     return res.status(500).json({ success: false, detail: error.message }); 
   }
