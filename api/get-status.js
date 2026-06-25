@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const axios = require('axios');
 
 // ==========================================
-// HÀM GỬI DISCORD ĐÃ ĐƯỢC ĐỘ THÊM LINK VÀ BUNDLE ID
+// HÀM GỬI DISCORD ĐÃ ĐƯỢC ĐÓNG GÓI SIÊU ĐẸP
 // ==========================================
 async function sendDiscordAlert(webhookUrl, accountName, appName, version, newStatus, bundleId, appId) {
   if (!webhookUrl || webhookUrl.includes("ĐIỀN_LINK_DISCORD")) return;
@@ -12,20 +12,18 @@ async function sendDiscordAlert(webhookUrl, accountName, appName, version, newSt
   else if (newStatus.includes("REVIEW") || newStatus.includes("WAITING") || newStatus.includes("PROCESSING")) { colorCode = "\u001b[1;33m"; icon = "🟡"; }
   else if (newStatus.includes("REJECTED")) { colorCode = "\u001b[1;31m"; icon = "🔴"; }
 
-  // 1. Tạo link quản trị App Store Connect nội bộ cho team click nhanh
-  const ascLink = `https://apps.apple.com/app/id${appId}`;
-  const connectLink = `https://appstoreconnect.apple.com/apps/${appId}/appstore`;
-
-  // 2. Thiết kế mẫu Card thông báo Discord siêu VIP bằng khối Ansi
+  // 1. Tạo khối thông điệp ANSI tối giản, gọn gàng và thẩm mỹ
   let ansiMessage = "```ansi\n" + 
-    `${icon} [${accountName}] ${appName} (v${version}) -> ${colorCode}${newStatus}\u001b[0m\n` +
-    `📦 Bundle ID: ${bundleId}\n` +
-    "```\n" +
-    `🔗 [Link Quản Trị AppStore Connect](<${connectLink}>)`;
+    `${icon} [${accountName}] ${appName}\n` +
+    `   🔹 Phiên bản : v${version}\n` +
+    `   🔹 Gói thầu   : ${bundleId}\n` +
+    `   🔹 Trạng thái : ${colorCode}${newStatus}\u001b[0m\n` +
+    "```";
 
-  // 3. Nếu game ĐÃ DUYỆT THÀNH CÔNG (READY_FOR_SALE), bổ sung thêm Link tải trên Store công khai
+  // 2. CHỈ KHI READY_FOR_SALE MỚI ĐẺ LINK GAME VỚI TIÊU ĐỀ NGẮN GỌN
   if (newStatus === "READY_FOR_SALE") {
-    ansiMessage += `\n🚀 [Link Tải Game Trên App Store](<${ascLink}>)`;
+    const appStoreLink = `https://apps.apple.com/app/id${appId}`;
+    ansiMessage += `\n🚀 [Link Game Trên App Store](<${appStoreLink}>)`;
   }
   
   try { 
@@ -78,7 +76,7 @@ module.exports = async (req, res) => {
         for (const app of apps) {
           const appName = app.attributes.name;
           const cleanAppId = app.id;
-          const bundleId = app.attributes.bundleId; // <--- ĐÃ LẤY ĐƯỢC COM. Ở ĐÂY
+          const bundleId = app.attributes.bundleId;
           
           let appVersions = [];
           const versionLinks = app.relationships.appStoreVersions.data || [];
@@ -107,16 +105,14 @@ module.exports = async (req, res) => {
 
     const batchResults = await Promise.all(accounts.map(acc => fetchSingleAccountData(acc)));
 
-    // Đẩy kết quả thô sang Google Sheets
     const updateRes = await axios.post(APPS_SCRIPT_URL, { action: "updateSheets", results: batchResults });
     const alerts = updateRes.data.alerts || [];
 
-    // Bắn Discord kèm theo Bundle ID và App ID tương ứng
     for (const alert of alerts) {
       await sendDiscordAlert(DISCORD_WEBHOOK_URL, alert.accountName, alert.appName, alert.version, alert.status, alert.bundleId, alert.appId);
     }
 
-    return res.status(200).json({ success: true, message: "Hệ thống đã bắn thông báo Discord kèm link và com hoàn hảo!" });
+    return res.status(200).json({ success: true, message: "Hệ thống đã cập nhật mẫu card Discord VIP thành công!" });
   } catch (error) {
     return res.status(500).json({ success: false, detail: error.message });
   }
