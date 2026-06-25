@@ -23,20 +23,29 @@ module.exports = async (req, res) => {
   try {
     if (!APPS_SCRIPT_URL) return res.status(500).json({ success: false, error: "Thiếu cấu hình APPS_SCRIPT_URL trên Vercel!" });
 
-    // 1. Lấy danh sách tài khoản cần quét từ Google Sheets
+    // 1. Lấy danh sách tài khoản từ Google Sheets về Vercel thông qua cầu nối Apps Script
     const accountsRes = await axios.post(APPS_SCRIPT_URL, { action: "getAccounts" });
     const accounts = accountsRes.data.accounts;
 
     if (!accounts || accounts.length === 0) {
-      return res.status(200).json({ success: true, message: "Tab [Cấu Hình] trên Sheets đang trống hoặc chưa điền!" });
+      return res.status(200).json({ success: true, message: "Hệ thống trống! Hãy điền tài khoản Apple Store vào tab [Cấu Hình] trên Sheets." });
     }
 
-    // 2. Tiến hành quét Apple Store Connect API song song
+    // 2. Hàm quét song song API Apple Store Connect của từng Account
     const fetchSingleAccountData = async (account) => {
-      const formattedKey = account.privateKey.replace(/\\n/g, '\n');
+      // 🛡️ BỘ LỌC CHUẨN HÓA KEY - KHẮC PHỤC LỖI ASYMMETRIC KEY 100%
+      let rawKey = account.privateKey.trim();
+      if (!rawKey.includes('\n') && rawKey.includes('-----BEGIN PRIVATE KEY-----')) {
+        rawKey = rawKey.replace(/\\n/g, '\n');
+      }
+      if (!rawKey.includes('\n')) {
+        const body = rawKey.replace('-----BEGIN PRIVATE KEY-----', '').replace('-----END PRIVATE KEY-----', '').replace(/\s+/g, '');
+        rawKey = `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----`;
+      }
+
       const token = jwt.sign(
         { sub: "user", aud: "appstoreconnect-v1", exp: Math.floor(Date.now() / 1000) + 600 }, 
-        formattedKey, 
+        rawKey, 
         { algorithm: 'ES256', header: { alg: 'ES256', kid: account.keyId, typ: 'JWT' }}
       );
 
@@ -68,23 +77,23 @@ module.exports = async (req, res) => {
         }
         return { accountName: account.accountName, apps: accountAppsData };
       } catch (err) {
-        console.error(`Lỗi quét acc ${account.accountName}:`, err.message);
+        console.error(`Lỗi quét tài khoản ${account.accountName}:`, err.message);
         return { accountName: account.accountName, apps: [] };
       }
     };
 
     const batchResults = await Promise.all(accounts.map(acc => fetchSingleAccountData(acc)));
 
-    // 3. Gửi toàn bộ dữ liệu thô sang Google Sheets để nó tự làm nhiệm vụ "Vẽ Mỹ Thuật và Đè Lịch Sử"
+    // 3. Đẩy toàn bộ cục kết quả thô về Google Sheets để nó tự phân chia Tab và vẽ mỹ thuật
     const updateRes = await axios.post(APPS_SCRIPT_URL, { action: "updateSheets", results: batchResults });
     const alerts = updateRes.data.alerts || [];
 
-    // 4. Nếu Google Sheets báo có biến động trạng thái -> Bắn Discord ANSI đổi màu siêu tốc
+    // 4. Nếu phát hiện đổi trạng thái -> Kích hoạt súng bắn Discord đổi màu ANSI cực đẹp
     for (const alert of alerts) {
       await sendDiscordAlert(DISCORD_WEBHOOK_URL, alert.accountName, alert.appName, alert.version, alert.status);
     }
 
-    return res.status(200).json({ success: true, message: "Hệ thống 100% Google Sheets đã cập nhật mỹ thuật và bắn Discord hoàn tất!" });
+    return res.status(200).json({ success: true, message: "Toàn bộ hệ thống 100% Google Sheets đã xử lý hoàn tất!" });
   } catch (error) {
     return res.status(500).json({ success: false, detail: error.message });
   }
