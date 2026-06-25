@@ -16,7 +16,7 @@ async function sendDiscordAlert(webhookUrl, accountName, appName, version, newSt
   let ansiMessage = "```ansi\n" + 
     `${icon} [${accountName}] ${appName}\n` +
     `   🔹 Phiên bản : v${version}\n` +
-    `   🔹 Gói thầu   : ${bundleId}\n` +
+    `   🔹 BundleID  : ${bundleId}\n` +
     `   🔹 Trạng thái : ${colorCode}${newStatus}\u001b[0m\n` +
     "```";
 
