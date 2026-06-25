@@ -1,15 +1,38 @@
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
 
-async function sendDiscordAlert(webhookUrl, accountName, appName, version, newStatus) {
+// ==========================================
+// HÀM GỬI DISCORD ĐÃ ĐƯỢC ĐỘ THÊM LINK VÀ BUNDLE ID
+// ==========================================
+async function sendDiscordAlert(webhookUrl, accountName, appName, version, newStatus, bundleId, appId) {
   if (!webhookUrl || webhookUrl.includes("ĐIỀN_LINK_DISCORD")) return;
+  
   let colorCode = "\u001b[1;30m"; let icon = "⚪";
   if (newStatus.includes("READY") || newStatus.includes("APPROVED")) { colorCode = "\u001b[1;32m"; icon = "🟢"; }
   else if (newStatus.includes("REVIEW") || newStatus.includes("WAITING") || newStatus.includes("PROCESSING")) { colorCode = "\u001b[1;33m"; icon = "🟡"; }
   else if (newStatus.includes("REJECTED")) { colorCode = "\u001b[1;31m"; icon = "🔴"; }
 
-  const ansiMessage = "```ansi\n" + `${icon} [${accountName}] ${appName} (v${version}) -> ${colorCode}${newStatus}\u001b[0m` + "\n```";
-  try { await axios.post(webhookUrl, { content: ansiMessage }); } catch (err) { console.error("Lỗi Discord:", err.message); }
+  // 1. Tạo link quản trị App Store Connect nội bộ cho team click nhanh
+  const ascLink = `https://apps.apple.com/app/id${appId}`;
+  const connectLink = `https://appstoreconnect.apple.com/apps/${appId}/appstore`;
+
+  // 2. Thiết kế mẫu Card thông báo Discord siêu VIP bằng khối Ansi
+  let ansiMessage = "```ansi\n" + 
+    `${icon} [${accountName}] ${appName} (v${version}) -> ${colorCode}${newStatus}\u001b[0m\n` +
+    `📦 Bundle ID: ${bundleId}\n` +
+    "```\n" +
+    `🔗 [Link Quản Trị AppStore Connect](<${connectLink}>)`;
+
+  // 3. Nếu game ĐÃ DUYỆT THÀNH CÔNG (READY_FOR_SALE), bổ sung thêm Link tải trên Store công khai
+  if (newStatus === "READY_FOR_SALE") {
+    ansiMessage += `\n🚀 [Link Tải Game Trên App Store](<${ascLink}>)`;
+  }
+  
+  try { 
+    await axios.post(webhookUrl, { content: ansiMessage }); 
+  } catch (err) { 
+    console.error("Lỗi Discord:", err.message); 
+  }
 }
 
 module.exports = async (req, res) => {
@@ -23,7 +46,6 @@ module.exports = async (req, res) => {
   try {
     if (!APPS_SCRIPT_URL) return res.status(500).json({ success: false, error: "Thiếu cấu hình APPS_SCRIPT_URL trên Vercel!" });
 
-    // 1. Lấy danh sách tài khoản từ Google Sheets về Vercel thông qua cầu nối Apps Script
     const accountsRes = await axios.post(APPS_SCRIPT_URL, { action: "getAccounts" });
     const accounts = accountsRes.data.accounts;
 
@@ -31,9 +53,7 @@ module.exports = async (req, res) => {
       return res.status(200).json({ success: true, message: "Hệ thống trống! Hãy điền tài khoản Apple Store vào tab [Cấu Hình] trên Sheets." });
     }
 
-    // 2. Hàm quét song song API Apple Store Connect của từng Account
     const fetchSingleAccountData = async (account) => {
-      // 🛡️ BỘ LỌC CHUẨN HÓA KEY - KHẮC PHỤC LỖI ASYMMETRIC KEY 100%
       let rawKey = account.privateKey.trim();
       if (!rawKey.includes('\n') && rawKey.includes('-----BEGIN PRIVATE KEY-----')) {
         rawKey = rawKey.replace(/\\n/g, '\n');
@@ -57,6 +77,9 @@ module.exports = async (req, res) => {
 
         for (const app of apps) {
           const appName = app.attributes.name;
+          const cleanAppId = app.id;
+          const bundleId = app.attributes.bundleId; // <--- ĐÃ LẤY ĐƯỢC COM. Ở ĐÂY
+          
           let appVersions = [];
           const versionLinks = app.relationships.appStoreVersions.data || [];
 
@@ -73,7 +96,7 @@ module.exports = async (req, res) => {
               appVersions.push({ versionString: vInfo.attributes.versionString, status: vInfo.attributes.appStoreState, ppos: ppos });
             }
           }
-          accountAppsData.push({ appName: appName, versions: appVersions });
+          accountAppsData.push({ appName: appName, appId: cleanAppId, bundleId: bundleId, versions: appVersions });
         }
         return { accountName: account.accountName, apps: accountAppsData };
       } catch (err) {
@@ -84,16 +107,16 @@ module.exports = async (req, res) => {
 
     const batchResults = await Promise.all(accounts.map(acc => fetchSingleAccountData(acc)));
 
-    // 3. Đẩy toàn bộ cục kết quả thô về Google Sheets để nó tự phân chia Tab và vẽ mỹ thuật
+    // Đẩy kết quả thô sang Google Sheets
     const updateRes = await axios.post(APPS_SCRIPT_URL, { action: "updateSheets", results: batchResults });
     const alerts = updateRes.data.alerts || [];
 
-    // 4. Nếu phát hiện đổi trạng thái -> Kích hoạt súng bắn Discord đổi màu ANSI cực đẹp
+    // Bắn Discord kèm theo Bundle ID và App ID tương ứng
     for (const alert of alerts) {
-      await sendDiscordAlert(DISCORD_WEBHOOK_URL, alert.accountName, alert.appName, alert.version, alert.status);
+      await sendDiscordAlert(DISCORD_WEBHOOK_URL, alert.accountName, alert.appName, alert.version, alert.status, alert.bundleId, alert.appId);
     }
 
-    return res.status(200).json({ success: true, message: "Toàn bộ hệ thống 100% Google Sheets đã xử lý hoàn tất!" });
+    return res.status(200).json({ success: true, message: "Hệ thống đã bắn thông báo Discord kèm link và com hoàn hảo!" });
   } catch (error) {
     return res.status(500).json({ success: false, detail: error.message });
   }
