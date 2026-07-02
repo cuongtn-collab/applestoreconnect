@@ -21,7 +21,7 @@ async function sendDiscordAlert(webhookUrl, alert) {
     ansiMessage = "```ansi\n" + 
       `${icon} [${alert.accountName}] ${alert.appName}\n` +
       `   🔹 Phiên bản : v${alert.version}\n` +
-      `   🔹 Gói thầu   : ${alert.bundleId}\n` +
+      `   🔹 BundleID   : ${alert.bundleId}\n` +
       `   🔹 Trạng thái : ${colorCode}${status}\u001b[0m\n` +
       "```";
     if (status === "READY_FOR_SALE") {
