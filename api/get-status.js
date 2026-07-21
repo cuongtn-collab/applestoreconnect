@@ -2,14 +2,15 @@ const jwt = require('jsonwebtoken');
 const axios = require('axios');
 
 // ==========================================
-// HÀM GỬI DISCORD CHO CẢ APP VÀ PPO (SIÊU ĐẸP)
+// HÀM GỬI DISCORD (APP VÀ PPO)
 // ==========================================
 async function sendDiscordAlert(webhookUrl, alert) {
   if (!webhookUrl || webhookUrl.includes("ĐIỀN_LINK_DISCORD")) return;
   
-  let colorCode = "\u001b[1;30m"; let icon = "⚪";
+  let colorCode = "\u001b[1;30m"; 
+  let icon = "⚪";
   const status = alert.status;
-  
+
   if (status.includes("READY") || status.includes("APPROVED") || status.includes("COMPLETED")) { colorCode = "\u001b[1;32m"; icon = "🟢"; }
   else if (status.includes("REVIEW") || status.includes("WAITING") || status.includes("PROCESSING")) { colorCode = "\u001b[1;33m"; icon = "🟡"; }
   else if (status.includes("REJECTED") || status.includes("STOPPED")) { colorCode = "\u001b[1;31m"; icon = "🔴"; }
@@ -17,22 +18,16 @@ async function sendDiscordAlert(webhookUrl, alert) {
   let ansiMessage = "";
 
   if (alert.type === "APP") {
-    // Mẫu Card dành cho App thay đổi trạng thái
     ansiMessage = "```ansi\n" + 
       `${icon} [${alert.accountName}] ${alert.appName}\n` +
       `   🔹 Phiên bản : v${alert.version}\n` +
-      `   🔹 BundleID   : ${alert.bundleId}\n` +
+      `   🔹 Bundle ID  : ${alert.bundleId}\n` +
       `   🔹 Trạng thái : ${colorCode}${status}\u001b[0m\n` +
       "```";
-    if (status === "READY_FOR_SALE") {
-      const appStoreLink = `https://apps.apple.com/app/id${alert.appId}`;
-      ansiMessage += `\n🚀 [Link Game Trên App Store](<${appStoreLink}>)`;
-    }
   } else if (alert.type === "PPO") {
-    // Mẫu Card dành riêng cho chiến dịch PPO (A/B Test) biến động
     ansiMessage = "```ansi\n" + 
       `${icon} [${alert.accountName}] ${alert.appName} (v${alert.version})\n` +
-      `   📊 CHIẾN DỊCH PPO (A/B TEST) BIẾN ĐỘNG\n` +
+      `   📊 CHIẾN DỊCH PPO (A/B TEST)\n` +
       `   🔹 Tên PPO   : ${alert.ppoName}\n` +
       `   🔹 Traffic   : ${alert.traffic}\n` +
       `   🔹 Trạng thái : ${colorCode}${status}\u001b[0m\n` +
@@ -118,16 +113,22 @@ module.exports = async (req, res) => {
 
     const batchResults = await Promise.all(accounts.map(acc => fetchSingleAccountData(acc)));
 
-    // Đẩy kết quả sang Google Sheets để so sánh bộ nhớ và vẽ Tab
+    // Đẩy kết quả sang Google Sheets để nó vẽ giao diện và ghi lịch sử
     const updateRes = await axios.post(APPS_SCRIPT_URL, { action: "updateSheets", results: batchResults });
     const alerts = updateRes.data.alerts || [];
 
-    // Duyệt mảng báo động tổng hợp gửi lên Discord
+    // ====================================================
+    // 🛡️ CHỐT CHẶN THÔNG MINH:
+    // 1. Nếu là PPO -> Bắn Discord luôn (mọi trạng thái)
+    // 2. Nếu là APP -> Chỉ bắn Discord khi là IN_REVIEW
+    // ====================================================
     for (const alert of alerts) {
-      await sendDiscordAlert(DISCORD_WEBHOOK_URL, alert);
+      if (alert.type === "PPO" || (alert.type === "APP" && alert.status === "IN_REVIEW")) {
+        await sendDiscordAlert(DISCORD_WEBHOOK_URL, alert);
+      }
     }
 
-    return res.status(200).json({ success: true, message: "Hệ thống đã cập nhật và theo dõi biến động song song App & PPO thành công!" });
+    return res.status(200).json({ success: true, message: "Đã quét xong. Chỉ bắn IN_REVIEW cho App, và mọi trạng thái cho PPO!" });
   } catch (error) {
     return res.status(500).json({ success: false, detail: error.message });
   }
