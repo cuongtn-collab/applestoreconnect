@@ -21,7 +21,7 @@ async function sendDiscordAlert(webhookUrl, alert) {
     ansiMessage = "```ansi\n" + 
       `${icon} [${alert.accountName}] ${alert.appName}\n` +
       `   🔹 Phiên bản : v${alert.version}\n` +
-      `   🔹 Bundle ID  : ${alert.bundleId}\n` +
+      `   🔹 Bundle ID   : ${alert.bundleId}\n` +
       `   🔹 Trạng thái : ${colorCode}${status}\u001b[0m\n` +
       "```";
   } else if (alert.type === "PPO") {
@@ -118,17 +118,17 @@ module.exports = async (req, res) => {
     const alerts = updateRes.data.alerts || [];
 
     // ====================================================
-    // 🛡️ CHỐT CHẶN THÔNG MINH:
+    // 🛡️ CHỐT CHẶN THÔNG MINH MỚI:
     // 1. Nếu là PPO -> Bắn Discord luôn (mọi trạng thái)
-    // 2. Nếu là APP -> Chỉ bắn Discord khi là IN_REVIEW
+    // 2. Nếu là APP -> Chỉ bắn khi là IN_REVIEW hoặc REJECTED
     // ====================================================
     for (const alert of alerts) {
-      if (alert.type === "PPO" || (alert.type === "APP" && alert.status === "IN_REVIEW")) {
+      if (alert.type === "PPO" || (alert.type === "APP" && (alert.status === "IN_REVIEW" || alert.status === "REJECTED"))) {
         await sendDiscordAlert(DISCORD_WEBHOOK_URL, alert);
       }
     }
 
-    return res.status(200).json({ success: true, message: "Đã quét xong. Chỉ bắn IN_REVIEW cho App, và mọi trạng thái cho PPO!" });
+    return res.status(200).json({ success: true, message: "Đã quét xong. Bắn IN_REVIEW và REJECTED cho App, mọi trạng thái cho PPO!" });
   } catch (error) {
     return res.status(500).json({ success: false, detail: error.message });
   }
