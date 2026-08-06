@@ -44,13 +44,16 @@ module.exports = async (req, res) => {
   try {
     if (!APPS_SCRIPT_URL) return res.status(500).json({ success: false, error: "Thiếu cấu hình APPS_SCRIPT_URL!" });
 
+    // 1. Lấy dữ liệu và bộ nhớ cũ
     const initRes = await axios.post(APPS_SCRIPT_URL, { action: "getData" });
     const accounts = initRes.data.accounts || [];
-    let cacheMap = initRes.data.cache || {};
+    const oldCacheMap = initRes.data.cache || {};
 
     if (accounts.length === 0) return res.status(200).json({ success: true, message: "Tab [Cấu Hình] trống!" });
 
     let dashboardData = [];
+    let newCacheMap = {}; // Tạo bộ nhớ mới tinh để đối chiếu
+    let hasChanges = false; // 🛡️ CHỐT CHẶN TRIỆT ĐỂ
 
     const fetchSingleAccountData = async (account) => {
       let rawKey = account.privateKey.trim();
@@ -80,26 +83,24 @@ module.exports = async (req, res) => {
             continue;
           }
 
-          // 🛡️ BỘ LỌC TÌM PHIÊN BẢN MỚI NHẤT
           let vInfos = versionLinks.map(vLink => included.find(item => item.id === vLink.id && item.type === 'appStoreVersions')).filter(Boolean);
-          
-          // Sắp xếp giảm dần theo thời gian tạo (hoặc ID) để đẩy bản mới nhất lên vị trí số 0
           vInfos.sort((a, b) => {
             const timeA = a.attributes.createdDate ? new Date(a.attributes.createdDate).getTime() : parseInt(a.id);
             const timeB = b.attributes.createdDate ? new Date(b.attributes.createdDate).getTime() : parseInt(b.id);
             return timeB - timeA;
           });
-
-          // CHỈ LẤY ĐÚNG 1 BẢN MỚI NHẤT
           const vInfo = vInfos[0]; 
           
           const safeVersion = vInfo.attributes.versionString;
           const currentStatus = vInfo.attributes.appStoreState;
-          
           const appCacheKey = `APP_${account.accountName}_${bundleId}_${safeVersion}`;
-          if (cacheMap[appCacheKey] !== currentStatus) {
-            cacheMap[appCacheKey] = currentStatus;
-            // Luật Discord: Chỉ báo IN_REVIEW và REJECTED
+          
+          // Ghi vào bộ nhớ mới
+          newCacheMap[appCacheKey] = currentStatus;
+
+          // SO SÁNH: Nếu trạng thái khác với bộ nhớ cũ -> Có biến!
+          if (oldCacheMap[appCacheKey] !== currentStatus) {
+            hasChanges = true;
             if (currentStatus === "IN_REVIEW" || currentStatus === "REJECTED") {
               await sendDiscordAlert(DISCORD_WEBHOOK_URL, { type: "APP", accountName: account.accountName, appName, version: safeVersion, status: currentStatus, bundleId });
             }
@@ -120,17 +121,16 @@ module.exports = async (req, res) => {
               const ppoCacheKey = `PPO_${account.accountName}_${bundleId}_${safeVersion}_${ppoName}`;
               const combinedStatus = `${ppoStatus}_${ppoTraffic}`;
               
-              if (cacheMap[ppoCacheKey] !== combinedStatus) {
-                cacheMap[ppoCacheKey] = combinedStatus;
-                // Luật Discord: Báo mọi trạng thái của PPO
+              newCacheMap[ppoCacheKey] = combinedStatus;
+
+              if (oldCacheMap[ppoCacheKey] !== combinedStatus) {
+                hasChanges = true;
                 await sendDiscordAlert(DISCORD_WEBHOOK_URL, { type: "PPO", accountName: account.accountName, appName, version: safeVersion, status: ppoStatus, ppoName, traffic: ppoTraffic });
               }
               
-              // Đẩy data vào Bảng Tổng Hợp
               dashboardData.push([account.accountName, appName, `'${safeVersion}`, bundleId, currentStatus, ppoName, ppoStatus, ppoTraffic]);
             }
           } else {
-            // Đẩy data vào Bảng Tổng Hợp (Game không có PPO)
             dashboardData.push([account.accountName, appName, `'${safeVersion}`, bundleId, currentStatus, "Không có", "-", "-"]);
           }
         }
@@ -141,17 +141,26 @@ module.exports = async (req, res) => {
 
     await Promise.all(accounts.map(acc => fetchSingleAccountData(acc)));
 
-    // Sắp xếp Bảng Tổng Hợp theo Tên Tài Khoản -> Tên Game
     dashboardData.sort((a, b) => {
       if (a[0] !== b[0]) return a[0].localeCompare(b[0]);
       return a[1].localeCompare(b[1]);
     });
 
-    // 3. GỬI DATA VỀ GOOGLE SHEETS VẼ BẢNG
-    const newCacheArr = Object.entries(cacheMap);
-    await axios.post(APPS_SCRIPT_URL, { action: "updateDashboard", newCache: newCacheArr, dashboardData: dashboardData });
+    // Bắt trường hợp có game mới thêm vào hoặc bị xóa đi
+    if (Object.keys(oldCacheMap).length !== Object.keys(newCacheMap).length) {
+      hasChanges = true;
+    }
 
-    return res.status(200).json({ success: true, message: "Quét thành công! Bảng Tổng Hợp giờ chỉ hiển thị bản mới nhất." });
+    // 2. CHỈ GỌI GOOGLE SHEETS IN LẠI NẾU THỰC SỰ CÓ THAY ĐỔI
+    if (hasChanges) {
+      const newCacheArr = Object.entries(newCacheMap);
+      await axios.post(APPS_SCRIPT_URL, { action: "updateDashboard", newCache: newCacheArr, dashboardData: dashboardData });
+      return res.status(200).json({ success: true, message: "Phát hiện thay đổi! Đã cập nhật lại Bảng Tổng Hợp." });
+    } else {
+      // NẾU KHÔNG CÓ GÌ THAY ĐỔI -> ĐI NGỦ 
+      return res.status(200).json({ success: true, message: "Không có gì thay đổi. Giữ nguyên bảng hiện tại!" });
+    }
+    
   } catch (error) {
     return res.status(500).json({ success: false, detail: error.message });
   }
