@@ -4,7 +4,6 @@ const axios = require('axios');
 async function sendDiscordAlert(webhookUrl, alert) {
   if (!webhookUrl || webhookUrl.includes("ĐIỀN_LINK_DISCORD")) return;
   
-  // Màu sắc riêng cho thẻ Discord
   let colorCode = alert.status.includes("REJECTED") ? "\u001b[1;31m" : "\u001b[1;33m"; 
   let icon = alert.status.includes("REJECTED") ? "🔴" : "🟡";
 
@@ -36,7 +35,6 @@ module.exports = async (req, res) => {
     let newCacheMap = {}; 
     let hasChanges = false; 
 
-    // Hàm quét xử lý song song
     const fetchSingleAccountData = async (account) => {
       let rawKey = account.privateKey.trim().replace(/\\n/g, '\n');
       if (!rawKey.includes('\n')) {
@@ -64,7 +62,6 @@ module.exports = async (req, res) => {
             continue;
           }
 
-          // Bộ lọc bản mới nhất siêu tốc
           let vInfos = versionLinks.map(vLink => included.find(item => item.id === vLink.id)).filter(Boolean);
           vInfos.sort((a, b) => (b.attributes.createdDate ? new Date(b.attributes.createdDate).getTime() : parseInt(b.id)) - (a.attributes.createdDate ? new Date(a.attributes.createdDate).getTime() : parseInt(a.id)));
           const vInfo = vInfos[0]; 
@@ -77,7 +74,6 @@ module.exports = async (req, res) => {
 
           if (oldCacheMap[appCacheKey] !== currentStatus) {
             hasChanges = true;
-            // 🛡️ CHỐT CHẶN STRICTLY DISCORD: CHỈ BÁO IN_REVIEW VÀ REJECTED
             if (currentStatus === "IN_REVIEW" || currentStatus === "REJECTED") {
               await sendDiscordAlert(DISCORD_WEBHOOK_URL, { type: "APP", accountName: account.accountName, appName, version: safeVersion, status: currentStatus, bundleId });
             }
@@ -101,7 +97,6 @@ module.exports = async (req, res) => {
 
               if (oldCacheMap[ppoCacheKey] !== combinedStatus) {
                 hasChanges = true;
-                // 🛡️ CHỐT CHẶN STRICTLY DISCORD CHO PPO: CHỈ BÁO IN_REVIEW VÀ REJECTED (Tương đương với luật của App)
                 if (ppoStatus === "IN_REVIEW" || ppoStatus === "REJECTED") {
                   await sendDiscordAlert(DISCORD_WEBHOOK_URL, { type: "PPO", accountName: account.accountName, appName, version: safeVersion, status: ppoStatus, ppoName, traffic: ppoTraffic });
                 }
@@ -123,12 +118,12 @@ module.exports = async (req, res) => {
 
     if (Object.keys(oldCacheMap).length !== Object.keys(newCacheMap).length) hasChanges = true;
 
-    // 2. CHỈ GHI LẠI GOOGLE SHEETS KHI THỰC SỰ CÓ THAY ĐỔI
+    // KHI CÓ THAY ĐỔI -> GỬI LÊN GG SHEETS ĐỂ VẼ LẠI BẢNG (VÀ GHI NHỚ MỚI LUÔN)
     if (hasChanges) {
-      await axios.post(APPS_SCRIPT_URL, { action: "updateDashboard", newCache: Object.entries(newCacheMap), dashboardData: dashboardData });
-      return res.status(200).json({ success: true, message: "Có thay đổi! Đã cập nhật Bảng Tổng Hợp." });
+      await axios.post(APPS_SCRIPT_URL, { action: "updateDashboard", dashboardData: dashboardData });
+      return res.status(200).json({ success: true, message: "Có biến động! Đã in lại Bảng Tổng Hợp." });
     } else {
-      return res.status(200).json({ success: true, message: "Không có biến động. Ngủ đông tiết kiệm tài nguyên!" });
+      return res.status(200).json({ success: true, message: "Yên ắng. Không tốn 1 giọt tài nguyên nào!" });
     }
     
   } catch (error) {
