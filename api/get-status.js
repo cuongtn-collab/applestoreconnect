@@ -4,8 +4,7 @@ const axios = require('axios');
 async function sendDiscordAlert(webhookUrl, alert) {
   if (!webhookUrl || webhookUrl.includes("ĐIỀN_LINK_DISCORD")) return;
   
-  let colorCode = "\u001b[1;30m"; 
-  let icon = "⚪";
+  let colorCode = "\u001b[1;30m"; let icon = "⚪";
   const status = alert.status;
 
   if (status.includes("READY") || status.includes("APPROVED") || status.includes("COMPLETED")) { colorCode = "\u001b[1;32m"; icon = "🟢"; }
@@ -31,11 +30,7 @@ async function sendDiscordAlert(webhookUrl, alert) {
       "```";
   }
   
-  try { 
-    await axios.post(webhookUrl, { content: ansiMessage }); 
-  } catch (err) { 
-    console.error("Lỗi Discord:", err.message); 
-  }
+  try { await axios.post(webhookUrl, { content: ansiMessage }); } catch (err) {}
 }
 
 module.exports = async (req, res) => {
@@ -49,16 +44,14 @@ module.exports = async (req, res) => {
   try {
     if (!APPS_SCRIPT_URL) return res.status(500).json({ success: false, error: "Thiếu cấu hình APPS_SCRIPT_URL!" });
 
-    // 1. GỌI GOOGLE SHEETS LẤY ACC VÀ BỘ NHỚ TẠM (RẤT NHANH)
     const initRes = await axios.post(APPS_SCRIPT_URL, { action: "getData" });
     const accounts = initRes.data.accounts || [];
     let cacheMap = initRes.data.cache || {};
 
     if (accounts.length === 0) return res.status(200).json({ success: true, message: "Tab [Cấu Hình] trống!" });
 
-    let hasChanges = false;
+    let dashboardData = [];
 
-    // 2. HÀM QUÉT APPLE VÀ SO SÁNH TRỰC TIẾP TRONG RAM
     const fetchSingleAccountData = async (account) => {
       let rawKey = account.privateKey.trim();
       if (!rawKey.includes('\n') && rawKey.includes('-----BEGIN PRIVATE KEY-----')) rawKey = rawKey.replace(/\\n/g, '\n');
@@ -82,44 +75,51 @@ module.exports = async (req, res) => {
           const bundleId = app.attributes.bundleId;
           const versionLinks = app.relationships.appStoreVersions.data || [];
 
+          if (versionLinks.length === 0) {
+            dashboardData.push([account.accountName, appName, "-", bundleId, "Chưa có bản build", "-", "-", "-"]);
+            continue;
+          }
+
           for (const vLink of versionLinks) {
             const vInfo = included.find(item => item.id === vLink.id && item.type === 'appStoreVersions');
             if (vInfo) {
               const safeVersion = vInfo.attributes.versionString;
               const currentStatus = vInfo.attributes.appStoreState;
               
-              // So sánh trạng thái App
               const appCacheKey = `APP_${account.accountName}_${bundleId}_${safeVersion}`;
               if (cacheMap[appCacheKey] !== currentStatus) {
                 cacheMap[appCacheKey] = currentStatus;
-                hasChanges = true;
-                // CHỐT CHẶN BẮN DISCORD CHO APP (Chỉ khi IN_REVIEW hoặc REJECTED)
                 if (currentStatus === "IN_REVIEW" || currentStatus === "REJECTED") {
                   await sendDiscordAlert(DISCORD_WEBHOOK_URL, { type: "APP", accountName: account.accountName, appName, version: safeVersion, status: currentStatus, bundleId });
                 }
               }
 
-              // So sánh PPO
               let ppoCampaigns = [];
               try {
                 const ppoRes = await axios.get(`https://api.appstoreconnect.apple.com/v1/appStoreVersions/${vLink.id}/appStoreVersionExperimentsV2`, { headers: { 'Authorization': `Bearer ${token}` } });
                 if (ppoRes.data.data) ppoCampaigns = ppoRes.data.data;
               } catch (e) {}
 
-              for (const ppo of ppoCampaigns) {
-                const ppoName = ppo.attributes.name;
-                const ppoStatus = ppo.attributes.state;
-                const ppoTraffic = ppo.attributes.trafficProportion ? `${ppo.attributes.trafficProportion}%` : "-";
-                
-                const ppoCacheKey = `PPO_${account.accountName}_${bundleId}_${safeVersion}_${ppoName}`;
-                const combinedStatus = `${ppoStatus}_${ppoTraffic}`;
-                
-                if (cacheMap[ppoCacheKey] !== combinedStatus) {
-                  cacheMap[ppoCacheKey] = combinedStatus;
-                  hasChanges = true;
-                  // PPO BẮN MỌI TRẠNG THÁI
-                  await sendDiscordAlert(DISCORD_WEBHOOK_URL, { type: "PPO", accountName: account.accountName, appName, version: safeVersion, status: ppoStatus, ppoName, traffic: ppoTraffic });
+              if (ppoCampaigns.length > 0) {
+                for (const ppo of ppoCampaigns) {
+                  const ppoName = ppo.attributes.name;
+                  const ppoStatus = ppo.attributes.state;
+                  const ppoTraffic = ppo.attributes.trafficProportion ? `${ppo.attributes.trafficProportion}%` : "-";
+                  
+                  const ppoCacheKey = `PPO_${account.accountName}_${bundleId}_${safeVersion}_${ppoName}`;
+                  const combinedStatus = `${ppoStatus}_${ppoTraffic}`;
+                  
+                  if (cacheMap[ppoCacheKey] !== combinedStatus) {
+                    cacheMap[ppoCacheKey] = combinedStatus;
+                    await sendDiscordAlert(DISCORD_WEBHOOK_URL, { type: "PPO", accountName: account.accountName, appName, version: safeVersion, status: ppoStatus, ppoName, traffic: ppoTraffic });
+                  }
+                  
+                  // Đẩy data vào Bảng Tổng Hợp
+                  dashboardData.push([account.accountName, appName, `'${safeVersion}`, bundleId, currentStatus, ppoName, ppoStatus, ppoTraffic]);
                 }
+              } else {
+                // Đẩy data vào Bảng Tổng Hợp (Game không có PPO)
+                dashboardData.push([account.accountName, appName, `'${safeVersion}`, bundleId, currentStatus, "Không có", "-", "-"]);
               }
             }
           }
@@ -129,16 +129,19 @@ module.exports = async (req, res) => {
       }
     };
 
-    // Chạy song song tất cả tài khoản
     await Promise.all(accounts.map(acc => fetchSingleAccountData(acc)));
 
-    // 3. NẾU CÓ BIẾN ĐỘNG, BÁO GOOGLE SHEETS LƯU LẠI BỘ NHỚ
-    if (hasChanges) {
-      const newCacheArr = Object.entries(cacheMap); // Chuyển map thành mảng 2 chiều [[key, value]]
-      await axios.post(APPS_SCRIPT_URL, { action: "updateCache", newCache: newCacheArr });
-    }
+    // Sắp xếp Bảng Tổng Hợp theo Tên Tài Khoản -> Tên Game cho đẹp mắt
+    dashboardData.sort((a, b) => {
+      if (a[0] !== b[0]) return a[0].localeCompare(b[0]);
+      return a[1].localeCompare(b[1]);
+    });
 
-    return res.status(200).json({ success: true, message: "Quét siêu tốc hoàn tất. Không bị timeout!" });
+    // 3. GỬI DATA VỀ GOOGLE SHEETS VẼ BẢNG (1 LỆNH DUY NHẤT - CỰC NHANH)
+    const newCacheArr = Object.entries(cacheMap);
+    await axios.post(APPS_SCRIPT_URL, { action: "updateDashboard", newCache: newCacheArr, dashboardData: dashboardData });
+
+    return res.status(200).json({ success: true, message: "Quét thành công! Bảng Tổng Hợp đã được cập nhật siêu tốc!" });
   } catch (error) {
     return res.status(500).json({ success: false, detail: error.message });
   }
